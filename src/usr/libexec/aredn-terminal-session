@@ -1,0 +1,39 @@
+#!/bin/sh
+# Run login ash under a PTY via socat so the shell echoes input and prints prompts.
+# CGI appends keystrokes to infile; we feed that into the PTY and capture output.
+# Usage: aredn-terminal-session <session-dir>
+DIR="$1"
+[ -n "$DIR" ] || exit 1
+[ -d "$DIR" ] || exit 1
+
+: > "$DIR/infile"
+: > "$DIR/stdout"
+date +%s > "$DIR/heartbeat"
+rm -f "$DIR/tty"
+
+# Master PTY linked at $DIR/tty; ash runs on a slave with a controlling TTY.
+socat PTY,link="$DIR/tty",raw,echo=0,waitslave EXEC:'/bin/ash -l',pty,setsid,ctty,stderr \
+	>/dev/null 2>&1 &
+echo $! > "$DIR/socat"
+echo $! > "$DIR/pid"
+
+# Wait for PTY symlink.
+i=0
+while [ ! -e "$DIR/tty" ] && [ "$i" -lt 20 ]; do
+	sleep 1
+	i=$((i + 1))
+done
+[ -e "$DIR/tty" ] || exit 1
+
+# PTY output -> logfile (prompts, echo, command output).
+cat "$DIR/tty" >>"$DIR/stdout" 2>/dev/null &
+echo $! > "$DIR/catpid"
+
+# Keystroke file -> PTY (CGI appends to infile).
+tail -f "$DIR/infile" >"$DIR/tty" 2>/dev/null &
+echo $! > "$DIR/tailpid"
+
+while kill -0 "$(cat "$DIR/socat" 2>/dev/null)" 2>/dev/null; do
+	sleep 1
+done
+exit 0
