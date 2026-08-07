@@ -22,7 +22,6 @@ Uses the node root password and the same `authV1` cookie as the stock `/a` UI. I
 ## Build
 
 ```sh
-cd aredn-terminal
 chmod +x build.sh
 ./build.sh
 ```
@@ -43,7 +42,7 @@ Uses vendored [kn6plv/MakeAPK](https://github.com/kn6plv/MakeAPK) — no OpenWrt
 ## Layout
 
 ```
-aredn-terminal/
+.
 ├── build.sh
 ├── tools/mkapk.py
 └── src/

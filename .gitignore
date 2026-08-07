@@ -1,2 +1,7 @@
 # Rebuild with ./build.sh
 dist/
+
+# Local-only helpers / secrets (not for GitHub)
+/install_package_remotely
+/install_package_remotely.conf
+/push_to_webserver
