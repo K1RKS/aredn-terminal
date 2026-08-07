@@ -4,6 +4,7 @@
   const statusEl = document.getElementById("status");
   const disconnectBtn = document.getElementById("btn-disconnect");
   const roleBtn = document.getElementById("btn-role");
+  const targetSelect = document.getElementById("target-select");
   const term = new Terminal({
     cursorBlink: true,
     // PTY (socat) already emits CRLF; do not convert again.
@@ -27,6 +28,8 @@
   let pollTimer = null;
   let pingTimer = null;
   let starting = false;
+  let currentTarget = "local";
+  let ignoreTargetChange = false;
 
   function setStatus(text) {
     if (statusEl) {
@@ -50,12 +53,22 @@
     }
   }
 
+  function selectedTarget() {
+    if (!targetSelect) {
+      return "local";
+    }
+    return targetSelect.value || "local";
+  }
+
   async function api(op, opts) {
     opts = opts || {};
     const params = new URLSearchParams();
     params.set("op", op);
     if (opts.cid) {
       params.set("cid", opts.cid);
+    }
+    if (opts.target) {
+      params.set("target", opts.target);
     }
     if (opts.dataB64) {
       params.set("data", opts.dataB64);
@@ -133,6 +146,62 @@
     }
   }
 
+  function populateTargets(payload) {
+    if (!targetSelect) {
+      return;
+    }
+    const nodename = (payload && payload.nodename) || "local";
+    const neighbors = (payload && payload.neighbors) || [];
+    const keep = selectedTarget();
+
+    ignoreTargetChange = true;
+    targetSelect.innerHTML = "";
+
+    const localOpt = document.createElement("option");
+    localOpt.value = "local";
+    localOpt.textContent = nodename + " localnode";
+    targetSelect.appendChild(localOpt);
+
+    const sep = document.createElement("option");
+    sep.disabled = true;
+    sep.value = "";
+    sep.textContent = "-----------";
+    targetSelect.appendChild(sep);
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const n = neighbors[i];
+      if (!n || !n.mac) {
+        continue;
+      }
+      const opt = document.createElement("option");
+      opt.value = "mac:" + n.mac;
+      opt.textContent = n.mac + " telnet";
+      if (n.ipv6) {
+        opt.title = n.ipv6 + "%br-dtdlink";
+      }
+      targetSelect.appendChild(opt);
+    }
+
+    if (keep && Array.prototype.some.call(targetSelect.options, function (o) {
+      return o.value === keep && !o.disabled;
+    })) {
+      targetSelect.value = keep;
+    } else {
+      targetSelect.value = "local";
+    }
+    ignoreTargetChange = false;
+  }
+
+  async function loadNeighbors() {
+    try {
+      const r = await api("neighbors");
+      populateTargets(r);
+    } catch (e) {
+      populateTargets({ nodename: "local", neighbors: [] });
+      setStatus("neighbors unavailable");
+    }
+  }
+
   async function pollOnce() {
     if (!cid) {
       return;
@@ -176,12 +245,14 @@
     location.replace("/a/status");
   }
 
-  async function joinSession() {
+  async function joinSession(target) {
     if (starting) {
       return;
     }
     starting = true;
     stopPolling();
+    target = target || selectedTarget() || "local";
+    currentTarget = target;
     setStatus("joining…");
     try {
       if (cid) {
@@ -192,8 +263,20 @@
         role = null;
       }
       term.reset();
-      const r = await api("join", { method: "POST" });
+      const r = await api("join", { method: "POST", target: target });
       cid = r.cid;
+      if (r.target) {
+        currentTarget = r.target;
+        if (targetSelect && targetSelect.value !== r.target) {
+          ignoreTargetChange = true;
+          if (Array.prototype.some.call(targetSelect.options, function (o) {
+            return o.value === r.target && !o.disabled;
+          })) {
+            targetSelect.value = r.target;
+          }
+          ignoreTargetChange = false;
+        }
+      }
       applyRole(r.role || "viewer");
       setConnectedUi(true);
       pollOnce();
@@ -218,6 +301,17 @@
     } finally {
       starting = false;
     }
+  }
+
+  async function onTargetChange() {
+    if (ignoreTargetChange || starting) {
+      return;
+    }
+    const next = selectedTarget();
+    if (!next || next === currentTarget) {
+      return;
+    }
+    await joinSession(next);
   }
 
   async function takeControl() {
@@ -268,8 +362,13 @@
   if (roleBtn) {
     roleBtn.addEventListener("click", takeControl);
   }
+  if (targetSelect) {
+    targetSelect.addEventListener("change", onTargetChange);
+  }
 
   setConnectedUi(false);
   term.options.disableStdin = true;
-  joinSession();
+  loadNeighbors().then(function () {
+    joinSession(selectedTarget());
+  });
 })();

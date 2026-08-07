@@ -1,18 +1,41 @@
 #!/bin/sh
-# Run login ash under a PTY via socat so the shell echoes input and prints prompts.
-# CGI appends keystrokes to infile; we feed that into the PTY and capture output.
-# Usage: aredn-terminal-session <session-dir>
+# Run a PTY-backed session via socat so CGI can feed keystrokes and capture output.
+# Usage: aredn-terminal-session <session-dir> [local|telnet] [ipv6]
+#   local  (default) — /bin/ash -l
+#   telnet — telnet <ipv6>%br-dtdlink (banner written to stdout first)
 DIR="$1"
+MODE="${2:-local}"
+IPV6="$3"
 [ -n "$DIR" ] || exit 1
 [ -d "$DIR" ] || exit 1
 
 : > "$DIR/infile"
 : > "$DIR/stdout"
 date +%s > "$DIR/heartbeat"
-rm -f "$DIR/tty"
+rm -f "$DIR/tty" "$DIR/run.sh" "$DIR/addr"
 
-# Master PTY linked at $DIR/tty; ash runs on a slave with a controlling TTY.
-socat PTY,link="$DIR/tty",raw,echo=0,waitslave EXEC:'/bin/ash -l',pty,setsid,ctty,stderr \
+# Default: local login shell. Telnet uses a tiny wrapper so the IPv6 address
+# (colons / %zone) never appears inside socat's EXEC: address parser.
+EXEC_CMD="/bin/ash -l"
+if [ "$MODE" = "telnet" ]; then
+	# Only allow hex + colons from the API-validated neighbor parse.
+	case "$IPV6" in
+		""|*[!0-9a-fA-F:]*) exit 1 ;;
+	esac
+	TARGET="${IPV6}%br-dtdlink"
+	# Show the command as the first terminal line before the PTY connects.
+	printf 'telnet %s\r\n' "$TARGET" >> "$DIR/stdout"
+	printf '%s\n' "$TARGET" > "$DIR/addr"
+	cat > "$DIR/run.sh" <<'EOF'
+#!/bin/sh
+exec telnet "$(cat "$1")"
+EOF
+	chmod 755 "$DIR/run.sh"
+	EXEC_CMD="$DIR/run.sh $DIR/addr"
+fi
+
+# Master PTY linked at $DIR/tty; command runs on a slave with a controlling TTY.
+socat PTY,link="$DIR/tty",raw,echo=0,waitslave EXEC:"$EXEC_CMD",pty,setsid,ctty,stderr \
 	>/dev/null 2>&1 &
 echo $! > "$DIR/socat"
 echo $! > "$DIR/pid"

@@ -238,6 +238,7 @@ function killShell()
     // Hard-kill every helper / leftover process from this package.
     system("ps w 2>/dev/null | grep aredn-terminal-session | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
     system("ps w 2>/dev/null | grep '/bin/ash -l' | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
+    system("ps w 2>/dev/null | grep 'telnet .*br-dtdlink' | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
     system("ps w 2>/dev/null | grep 'tail -f /tmp/aredn-terminal' | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
     system("ps w 2>/dev/null | grep 'socat PTY,link=/tmp/aredn-terminal' | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
     system("ps w 2>/dev/null | grep '/tmp/aredn-terminal/active/tty' | grep -v grep | while read pid rest; do kill -9 \"$pid\" 2>/dev/null; done");
@@ -254,6 +255,133 @@ function killShell()
     clearBadge();
 };
 
+function normalizeMac(mac)
+{
+    return lc(trim(mac || ""));
+};
+
+function validMac(mac)
+{
+    return mac && match(mac, /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/);
+};
+
+function validIpv6(ip)
+{
+    return ip && match(ip, /^[0-9a-fA-F:]+$/) && index(ip, ":") >= 0;
+};
+
+function isLinkLocal(ip)
+{
+    return index(lc(ip || ""), "fe80:") === 0;
+};
+
+/**
+ * Parse br-dtdlink IPv6 neighbors into sorted [{ mac, ipv6 }, ...].
+ * Prefer fe80:: when a MAC has multiple addresses.
+ */
+export function listDtdNeighbors()
+{
+    const byMac = {};
+    const f = fs.popen("ip -6 neigh show dev br-dtdlink 2>/dev/null");
+    if (f) {
+        const text = f.read("all") || "";
+        f.close();
+        const lines = split(text, /\n/);
+        for (let i = 0; i < length(lines); i++) {
+            const line = trim(lines[i]);
+            if (!line) {
+                continue;
+            }
+            const m = match(line, /^([0-9a-fA-F:]+)\s+.*lladdr\s+([0-9a-fA-F:]+)/);
+            if (!m) {
+                continue;
+            }
+            const ipv6 = m[1];
+            const mac = normalizeMac(m[2]);
+            if (!validMac(mac) || !validIpv6(ipv6)) {
+                continue;
+            }
+            const prev = byMac[mac];
+            if (!prev || (!isLinkLocal(prev) && isLinkLocal(ipv6))) {
+                byMac[mac] = ipv6;
+            }
+        }
+    }
+
+    const macs = [];
+    for (let mac in byMac) {
+        push(macs, mac);
+    }
+    // Insertion sort ascending by MAC.
+    for (let i = 1; i < length(macs); i++) {
+        const key = macs[i];
+        let j = i - 1;
+        while (j >= 0 && macs[j] > key) {
+            macs[j + 1] = macs[j];
+            j--;
+        }
+        macs[j + 1] = key;
+    }
+
+    const out = [];
+    for (let i = 0; i < length(macs); i++) {
+        push(out, { mac: macs[i], ipv6: byMac[macs[i]] });
+    }
+    return out;
+};
+
+export function getNodeName()
+{
+    let name = trim(configuration.getName() || "");
+    return name !== "" ? name : "local";
+};
+
+export function neighborsPayload()
+{
+    return {
+        ok: true,
+        nodename: getNodeName(),
+        neighbors: listDtdNeighbors()
+    };
+};
+
+function currentTargetKey()
+{
+    return trim(fs.readfile(`${SHELL_DIR}/target`) || "local") || "local";
+};
+
+/**
+ * Resolve UI target string to spawn args.
+ * target: "local" | "mac:aa:bb:cc:dd:ee:ff"
+ */
+function resolveTarget(target)
+{
+    target = trim(target || "local");
+    if (target === "" || target == "local") {
+        return { mode: "local", key: "local" };
+    }
+    const m = match(target, /^mac:(.+)$/);
+    if (!m) {
+        return { error: "bad_target", message: "target must be local or mac:<addr>" };
+    }
+    const mac = normalizeMac(m[1]);
+    if (!validMac(mac)) {
+        return { error: "bad_target", message: "invalid MAC address" };
+    }
+    const neighbors = listDtdNeighbors();
+    let ipv6 = null;
+    for (let i = 0; i < length(neighbors); i++) {
+        if (neighbors[i].mac == mac) {
+            ipv6 = neighbors[i].ipv6;
+            break;
+        }
+    }
+    if (!ipv6 || !validIpv6(ipv6)) {
+        return { error: "unknown_mac", message: "MAC not found on br-dtdlink" };
+    }
+    return { mode: "telnet", key: `mac:${mac}`, mac: mac, ipv6: ipv6 };
+};
+
 export function refreshBadge()
 {
     if (shellAlive() && length(listClientIds()) > 0) {
@@ -264,7 +392,7 @@ export function refreshBadge()
     }
 };
 
-function spawnShell()
+function spawnShell(resolved)
 {
     // Always start from a clean process table / tmp tree.
     killShell();
@@ -273,7 +401,13 @@ function spawnShell()
     ensureDir(SHELL_DIR);
     ensureDir(CLIENTS_DIR);
     fs.writefile(`${SHELL_DIR}/next_order`, "0");
-    system(`setsid /usr/libexec/aredn-terminal-session '${SHELL_DIR}' >/dev/null 2>&1 &`);
+    fs.writefile(`${SHELL_DIR}/target`, resolved.key);
+    if (resolved.mode == "telnet") {
+        system(`setsid /usr/libexec/aredn-terminal-session '${SHELL_DIR}' telnet '${resolved.ipv6}' >/dev/null 2>&1 &`);
+    }
+    else {
+        system(`setsid /usr/libexec/aredn-terminal-session '${SHELL_DIR}' local >/dev/null 2>&1 &`);
+    }
     system("sleep 1");
     return shellAlive();
 };
@@ -347,38 +481,48 @@ export function cleanupStale()
 };
 
 /**
- * Join existing shell as viewer, or create shell + join as primary.
+ * Join existing session as viewer, or create session + join as primary.
+ * target: "local" (default) or "mac:<addr>" — different target kills and respawns.
  */
-export function joinSession()
+export function joinSession(target)
 {
     cleanupStale();
 
+    const resolved = resolveTarget(target);
+    if (resolved.error) {
+        return resolved;
+    }
+
     if (shellAlive()) {
-        const cid = createClient("viewer");
-        // Ensure someone is primary (e.g. after races).
-        let hasPrimary = false;
-        const ids = listClientIds();
-        for (let i = 0; i < length(ids); i++) {
-            if (readRole(ids[i]) == "primary") {
-                hasPrimary = true;
-                break;
+        if (currentTargetKey() == resolved.key) {
+            const cid = createClient("viewer");
+            // Ensure someone is primary (e.g. after races).
+            let hasPrimary = false;
+            const ids = listClientIds();
+            for (let i = 0; i < length(ids); i++) {
+                if (readRole(ids[i]) == "primary") {
+                    hasPrimary = true;
+                    break;
+                }
             }
+            if (!hasPrimary) {
+                promotePrimary();
+            }
+            refreshBadge();
+            return { sid: "active", cid: cid, role: readRole(cid), target: resolved.key };
         }
-        if (!hasPrimary) {
-            promotePrimary();
-        }
-        refreshBadge();
-        return { sid: "active", cid: cid, role: readRole(cid) };
+        // Requested target differs from the live session — replace it.
+        killShell();
     }
 
     system(`rm -rf '${SESSION_ROOT}'`);
-    if (!spawnShell()) {
+    if (!spawnShell(resolved)) {
         system(`rm -rf '${SESSION_ROOT}'`);
         return { error: "spawn", message: "Failed to start shell session" };
     }
     const cid = createClient("primary");
     setBadge(true);
-    return { sid: "active", cid: cid, role: "primary" };
+    return { sid: "active", cid: cid, role: "primary", target: resolved.key };
 };
 
 export function leaveClient(cid)

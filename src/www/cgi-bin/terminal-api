@@ -1,7 +1,7 @@
 #!/usr/bin/ucode
 /*
  * Terminal session API. Auth required on every operation.
- * Ops: join | read | write | leave | takeover | ping | stop
+ * Ops: join | read | write | leave | takeover | ping | stop | neighbors
  * Clients: cid identifies browser; one primary may write, viewers are readonly.
  */
 
@@ -12,6 +12,46 @@ const env = {
     REQUEST_METHOD: getenv("REQUEST_METHOD") || "GET",
     QUERY_STRING: getenv("QUERY_STRING") || "",
 };
+
+function jsonValue(v)
+{
+    const t = type(v);
+    if (t == "bool") {
+        print(v ? "true" : "false");
+    }
+    else if (t == "int" || t == "double") {
+        print(`${v}`);
+    }
+    else if (v == null) {
+        print("null");
+    }
+    else if (t == "array") {
+        print("[");
+        for (let i = 0; i < length(v); i++) {
+            if (i > 0) {
+                print(",");
+            }
+            jsonValue(v[i]);
+        }
+        print("]");
+    }
+    else if (t == "object") {
+        print("{");
+        let first = true;
+        for (let k in v) {
+            if (!first) {
+                print(",");
+            }
+            first = false;
+            print(`"${term.jsonEscape(`${k}`)}":`);
+            jsonValue(v[k]);
+        }
+        print("}");
+    }
+    else {
+        print(`"${term.jsonEscape(`${v}`)}"`);
+    }
+}
 
 function send(code, obj)
 {
@@ -25,30 +65,18 @@ function send(code, obj)
     print("Content-type: application/json; charset=utf-8\r\n");
     print("Cache-Control: no-store\r\n");
     print("\r\n");
+    jsonValue(obj);
+    print("\n");
+}
 
-    let first = true;
-    print("{");
-    for (let k in obj) {
-        if (!first) {
-            print(",");
-        }
-        first = false;
-        const v = obj[k];
-        print(`"${k}":`);
-        if (type(v) == "bool") {
-            print(v ? "true" : "false");
-        }
-        else if (type(v) == "int" || type(v) == "double") {
-            print(`${v}`);
-        }
-        else if (v == null) {
-            print("null");
-        }
-        else {
-            print(`"${term.jsonEscape(`${v}`)}"`);
-        }
+function bodyParam(body, name)
+{
+    const re = regexp(`(^|&)${name}=([^&]*)`);
+    const m = match(body, re);
+    if (m) {
+        return term.urlDecode(m[2]);
     }
-    print("}\n");
+    return null;
 }
 
 if (!term.isAuthenticated(env)) {
@@ -60,27 +88,36 @@ else {
     // Prefer cid; accept legacy sid as client id for leave/stop from old UIs.
     const cid = q.cid || q.sid || "";
     let body = "";
+    let target = q.target || "";
 
     if (env.REQUEST_METHOD == "POST") {
         body = term.readPostBody();
         if (!op) {
-            // ucode regex has no (?:...) non-capturing groups
-            const om = match(body, /(^|&)op=([^&]*)/);
-            if (om) {
-                op = term.urlDecode(om[2]);
+            const fromBody = bodyParam(body, "op");
+            if (fromBody != null) {
+                op = fromBody;
+            }
+        }
+        if (!target) {
+            const fromBody = bodyParam(body, "target");
+            if (fromBody != null) {
+                target = fromBody;
             }
         }
     }
 
     term.cleanupStale();
 
-    if (op == "join" || op == "start") {
-        const r = term.joinSession();
+    if (op == "neighbors") {
+        send(200, term.neighborsPayload());
+    }
+    else if (op == "join" || op == "start") {
+        const r = term.joinSession(target || "local");
         if (r.error) {
             send(400, r);
         }
         else {
-            send(200, { ok: true, sid: r.sid, cid: r.cid, role: r.role });
+            send(200, { ok: true, sid: r.sid, cid: r.cid, role: r.role, target: r.target });
         }
     }
     else if (op == "read") {
@@ -109,9 +146,9 @@ else {
             data = b64dec(term.urlDecode(q.data)) || "";
         }
         else {
-            const dm = match(body, /(^|&)data=([^&]*)/);
-            if (dm) {
-                data = b64dec(term.urlDecode(dm[2])) || "";
+            const fromBody = bodyParam(body, "data");
+            if (fromBody != null) {
+                data = b64dec(fromBody) || "";
             }
             else if (length(body)) {
                 data = body;
@@ -166,6 +203,6 @@ else {
         }
     }
     else {
-        send(400, { error: "bad_op", message: "op must be join|read|write|leave|takeover|ping|stop" });
+        send(400, { error: "bad_op", message: "op must be join|read|write|leave|takeover|ping|stop|neighbors" });
     }
 }

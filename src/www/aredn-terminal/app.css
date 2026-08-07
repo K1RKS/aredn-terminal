@@ -20,10 +20,27 @@ html, body {
   font-size: 0.9rem;
 }
 
+.bar .target-select {
+  font: inherit;
+  font-size: 0.8rem;
+  max-width: 14rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid #30363d;
+  background: #21262d;
+  color: #e6edf3;
+  border-radius: 0;
+}
+
+.bar .target-select:focus {
+  outline: 1px solid #58a6ff;
+  outline-offset: 1px;
+}
+
 .bar .status {
   flex: 1;
   font-size: 0.8rem;
   color: #8b949e;
+  min-width: 0;
 }
 
 .bar button {
