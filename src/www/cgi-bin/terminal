@@ -53,6 +53,7 @@ if (!authed) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AREDN Terminal Login</title>
+<link rel="icon" type="image/svg+xml" href="/apps/terminal/icon.svg">
 <style>
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
 font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#1a1d21;color:#e8eaed}
@@ -85,6 +86,7 @@ else {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AREDN Terminal</title>
+<link rel="icon" type="image/svg+xml" href="/apps/terminal/icon.svg">
 <link rel="stylesheet" href="/aredn-terminal/xterm.css">
 <link rel="stylesheet" href="/aredn-terminal/app.css">
 </head>
