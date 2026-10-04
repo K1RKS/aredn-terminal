@@ -1,5 +1,6 @@
 # Rebuild with ./build.sh
 dist/
+src/usr/share/aredn-terminal/version
 
 # Local-only helpers / secrets (not for GitHub)
 /install_package_remotely

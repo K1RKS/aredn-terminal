@@ -3,17 +3,23 @@
 # Bump -v (patch: 0.1.x) on every package change before rebuild/commit.
 set -e
 cd "$(dirname "$0")"
+VERSION=0.1.16
+RELEASE=r0
 mkdir -p dist
 chmod +x \
   src/www/cgi-bin/terminal \
   src/www/cgi-bin/terminal-api \
   src/www/cgi-bin/apps/terminal/admin \
   src/usr/libexec/aredn-terminal-session \
+  src/usr/bin/aredn-telnet \
   tools/mkapk.py
+# Shown as the page title tooltip; read by aredn_terminal.uc packageVersion().
+mkdir -p src/usr/share/aredn-terminal
+echo "$VERSION-$RELEASE" > src/usr/share/aredn-terminal/version
 python3 tools/mkapk.py \
   -n aredn-terminal \
-  -v 0.1.14 \
-  -r r0 \
+  -v "$VERSION" \
+  -r "$RELEASE" \
   -a noarch \
   -d src \
   -o dist \

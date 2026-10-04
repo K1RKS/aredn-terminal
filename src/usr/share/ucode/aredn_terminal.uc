@@ -275,6 +275,12 @@ function isLinkLocal(ip)
     return index(lc(ip || ""), "fe80:") === 0;
 };
 
+export function packageVersion()
+{
+    const v = trim(fs.readfile("/usr/share/aredn-terminal/version") || "");
+    return match(v, /^[0-9A-Za-z.+_-]+$/) ? v : "unknown";
+};
+
 /**
  * Parse br-dtdlink IPv6 neighbors into sorted [{ mac, ipv6 }, ...].
  * Prefer fe80:: when a MAC has multiple addresses.

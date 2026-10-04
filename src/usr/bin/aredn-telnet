@@ -1,0 +1,61 @@
+#!/bin/sh
+# Telnet to a br-dtdlink neighbor by MAC address (CLI twin of the web UI target menu).
+DEV=br-dtdlink
+
+usage() {
+	echo "Usage: ${0##*/} [-n] <mac>   telnet to <mac> over $DEV (-n: print address only)" >&2
+	echo "       ${0##*/} -l           list $DEV neighbors (mac ipv6)" >&2
+	exit 2
+}
+
+# Same selection rule as the web UI: one address per MAC, fe80:: preferred.
+neighbors() {
+	ip -6 neigh show dev "$DEV" 2>/dev/null | awk '
+		$1 ~ /^[0-9a-fA-F:]+$/ {
+			for (i = 2; i < NF; i++) if ($i == "lladdr") {
+				mac = tolower($(i + 1)); ip = $1
+				if (!(mac in best) || (best[mac] !~ /^fe80:/ && ip ~ /^fe80:/)) best[mac] = ip
+			}
+		}
+		END { for (m in best) print m, best[m] }' | sort
+}
+
+lookup() {
+	neighbors | awk -v m="$1" '$1 == m { print $2; exit }'
+}
+
+# Only correct when the neighbor derives its link-local address from its MAC.
+eui64() {
+	set -- $(echo "$1" | tr ':' ' ')
+	printf 'fe80::%x:%x:%x:%x\n' \
+		$(( ((0x$1 ^ 2) << 8) | 0x$2 )) $(( (0x$3 << 8) | 0xff )) \
+		$(( 0xfe00 | 0x$4 )) $(( (0x$5 << 8) | 0x$6 ))
+}
+
+PRINT=
+case "$1" in
+	-l) [ $# -eq 1 ] || usage; neighbors; exit 0 ;;
+	-n) PRINT=1; shift ;;
+	""|-h|--help) usage ;;
+esac
+[ $# -eq 1 ] || usage
+
+MAC=$(echo "$1" | tr 'A-F' 'a-f' | sed 's/-/:/g')
+echo "$MAC" | grep -Eq '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$' || { echo "invalid MAC: $1" >&2; exit 2; }
+
+IP=$(lookup "$MAC")
+if [ -z "$IP" ]; then
+	ping -6 -c 2 -W 1 -I "$DEV" ff02::1 >/dev/null 2>&1
+	IP=$(lookup "$MAC")
+fi
+if [ -z "$IP" ]; then
+	IP=$(eui64 "$MAC")
+	echo "$MAC not in $DEV neighbor table; trying EUI-64 address $IP" >&2
+fi
+
+if [ -n "$PRINT" ]; then
+	echo "${IP}%${DEV}"
+	exit 0
+fi
+echo "telnet ${IP}%${DEV}" >&2
+exec telnet "${IP}%${DEV}"

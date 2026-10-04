@@ -92,7 +92,7 @@ else {
 </head>
 <body>
 <header class="bar">
-  <span class="title">AREDN Terminal</span>
+  <span class="title" title="aredn-terminal ${term.packageVersion()}">AREDN Terminal</span>
   <select id="target-select" class="target-select" title="Session target" aria-label="Session target">
     <option value="local">local</option>
   </select>
